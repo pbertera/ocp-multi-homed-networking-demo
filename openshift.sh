@@ -3,6 +3,7 @@
 # path to the demo.sh file (https://github.com/pbertera/demo.sh)
 . ../demo.sh/demo.sh
 
+clear
 SPEED=5
 VM_MASTER_DEVICE=eth1
 OCP_MASTER_DEVICE=enp7s0
