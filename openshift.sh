@@ -14,7 +14,8 @@ ps1_bg_color=${c['bg_CYAN']}
 ps1_color=${c['ORANGE']}
 
 ps1() {
-    echo -ne "${ps1_bg_color}${ps1_color}${ps1_user}@${ps1_hostname}${c['reset']}${c['CYAN']} ${c['BLUE']}$(basename $(pwd)) \$${c['reset']} "
+    echo -ne "${ps1_bg_color}${ps1_color}${ps1_user}@${ps1_hostname}${c['reset']}${c['CYAN']} ${c['BLUE']} multi-network-demo \$${c['reset']} "
+    #echo -ne "${ps1_bg_color}${ps1_color}${ps1_user}@${ps1_hostname}${c['reset']}${c['CYAN']} ${c['BLUE']}$(basename $(pwd)) \$${c['reset']} "
 }   
 
 function sshCommand {
@@ -171,6 +172,84 @@ spec:
 EOF
 }
 
+function getPodIP(){
+  dev=$1
+  shift
+  oc exec $@ -- ip -4 -o addr sh $dev | sed -e 's/.*inet\ \(.*\)\ brd.*/\1/' | cut -d / -f 1
+}
+
+function enableMultiNetworkPolicy(){
+  p "# Enabling MultiNetworkPolicy on the CNO"
+  p 'cat << EOF | oc patch -p "$(cat)" --type json networks.operator.openshift.io cluster'
+  cat << END
+[               
+  {'op': 'add', 'path': '/spec/useMultiNetworkPolicy', value: true}
+]
+EOF
+END
+
+  cat << EOF | oc patch -p "$(cat)" --type json networks.operator.openshift.io cluster
+[               
+  {'op': 'add', 'path': '/spec/useMultiNetworkPolicy', value: true}
+]  
+EOF
+
+  loop "pe oc get pods -n openshift-multus"
+}
+
+function createNetworkPolicy(){
+  id=$1
+  p "# create MultiNetworkPolicy to match IP from VLAN $id on the VM"
+  p 'cat << EOF | oc create -f -'
+  cat << END
+apiVersion: k8s.cni.cncf.io/v1beta1
+kind: MultiNetworkPolicy
+metadata:            
+  name: allow-from-vm
+  namespace: multi-network
+  annotations:       
+    k8s.v1.cni.cncf.io/policy-for: default/vlan-${id}
+spec:                
+  podSelector:  {}   
+  policyTypes:       
+  - Ingress          
+  ingress:           
+  - from:            
+    - ipBlock:       
+        cidr: 192.168.${id}.1/32
+EOF
+END
+
+  cat << EOF | oc create -f -
+apiVersion: k8s.cni.cncf.io/v1beta1
+kind: MultiNetworkPolicy
+metadata:            
+  name: allow-from-vm
+  namespace: multi-network
+  annotations:       
+    k8s.v1.cni.cncf.io/policy-for: default/vlan-${id}
+spec:                
+  podSelector:  {}   
+  policyTypes:       
+  - Ingress          
+  ingress:           
+  - from:            
+    - ipBlock:       
+        cidr: 192.168.${id}.1/32
+EOF
+
+}
+
+function testNetworkPolicy(){
+  id=$1
+  pod=$2
+  p "# Ping from the VM ip 192.168.${id}.1"
+  sshCommand vm ping -I 192.168.${id}.1 -c 3 $pod
+  
+  p "# Ping from the VM ip 192.168.${id}.2"
+  sshCommand vm ping -I 192.168.${id}.2 -c 3 $pod
+}
+
 function run_demo {
   ps1_hostname=localhost
 
@@ -201,7 +280,7 @@ function run_demo {
   makeVlan 20 up
   makeVlan 30 up
 
-  loop "pe oc get nncp; oc get nnce"
+  loop "pe oc get nncp,nnce"
 
   #while [ "$key" != 'c' ]; do
   #  pe oc get nncp
@@ -223,7 +302,7 @@ function run_demo {
   createPod 20
   createPod 30
 
-  loop pe oc get pods
+  loop "pe oc get pods"
   #while [ "$key" != 'c' ]; do
   #  pe oc get pods
   #  read -n 1 -rep $'Press "c" to continue with the demo: \n' key
@@ -236,6 +315,24 @@ function run_demo {
   pe oc exec pod-vlan10 -- ping -c 3 192.168.10.1
   pe oc exec pod-vlan20 -- ping -c 3 192.168.20.1
   pe oc exec pod-vlan30 -- ping -c 3 192.168.30.1
+
+  enableMultiNetworkPolicy
+  createNetworkPolicy 10
+
+  pod_ip=$(getPodIP net1 -n $PROJECT pod-vlan10)
+  p "# get pod pod-vlan10 IP address on net1"
+  pe "oc exec -n $PROJECT pod-vlan10 -- ip -4 -o addr sh net1"
+  
+  p "# Add to VM another IP on VLAN 10"
+  p "ssh vm"
+  ps1_hostname=vm
+  sshCommand vm sudo ip addr add 192.168.10.2/24 dev ${VM_MASTER_DEVICE}.10
+  
+  p "# Ping the pod pod-vlan10 ($pod_ip) from the VM ip 192.168.10.1"
+  sshCommand vm ping -I 192.168.10.1 -c 3 $pod_ip
+  
+  p "# Ping the pod pod-vlan10 ($pod_ip) from the VM ip 192.168.10.2"
+  sshCommand vm ping -I 192.168.10.2 -c 3 $pod_ip
 }
 
 function reset_demo {
@@ -275,12 +372,27 @@ EOF
   makeVlan 20 absent
   makeVlan 30 absent
 
-  loop "pe oc get nncp; oc get nnce"
-
   pe oc delete nncp vlan-10
   pe oc delete nncp vlan-20
   pe oc delete nncp vlan-30
+  loop "pe oc get nncp,nnce"
+
   pe oc delete project ${PROJECT}
+
+  p '# Remove the spec.useMultiNetworkPolicy from the CNO'
+  p 'cat << EOF | oc patch -p "$(cat)" --type json networks.operator.openshift.io cluster'
+  cat << END
+[
+  {'op': 'remove', 'path': '/spec/useMultiNetworkPolicy'}
+]
+EOF
+END
+
+  cat << EOF | oc patch -p "$(cat)" --type json networks.operator.openshift.io cluster
+[
+  {'op': 'remove', 'path': '/spec/useMultiNetworkPolicy'}
+]
+EOF
 }
 
 if [ "$1" == "reset" ]; then
