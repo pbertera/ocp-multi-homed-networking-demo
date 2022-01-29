@@ -12,9 +12,10 @@ PROJECT=multi-network
 ps1_user=pietro
 ps1_bg_color=${c['bg_CYAN']}
 ps1_color=${c['ORANGE']}
+ps1_demo="MultiNetwork-Demo"
 
 ps1() {
-    echo -ne "${ps1_bg_color}${ps1_color}${ps1_user}@${ps1_hostname}${c['reset']}${c['CYAN']} ${c['BLUE']} multi-network-demo \$${c['reset']} "
+    echo -ne "${ps1_bg_color}${ps1_color}${ps1_user}@${ps1_hostname}${c['reset']}${c['CYAN']} ${c['BLUE']} $ps1_demo \$${c['reset']} "
     #echo -ne "${ps1_bg_color}${ps1_color}${ps1_user}@${ps1_hostname}${c['reset']}${c['CYAN']} ${c['BLUE']}$(basename $(pwd)) \$${c['reset']} "
 }   
 
@@ -316,6 +317,10 @@ function run_demo {
   pe oc exec pod-vlan20 -- ping -c 3 192.168.20.1
   pe oc exec pod-vlan30 -- ping -c 3 192.168.30.1
 
+  p "# End of the OpenShift demo"
+  ps1_demo="MultiNetworkPolicy-Demo"
+  p "# Start of the MultiNetwork Policy demo"
+
   enableMultiNetworkPolicy
   createNetworkPolicy 10
 
@@ -371,11 +376,11 @@ EOF
   makeVlan 10 absent
   makeVlan 20 absent
   makeVlan 30 absent
+  loop "pe oc get nncp,nnce"
 
   pe oc delete nncp vlan-10
   pe oc delete nncp vlan-20
   pe oc delete nncp vlan-30
-  loop "pe oc get nncp,nnce"
 
   pe oc delete project ${PROJECT}
 
